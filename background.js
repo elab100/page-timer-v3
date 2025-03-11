@@ -1,76 +1,67 @@
-/*
- * Copyright 2013 Google Inc. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+import { FormatDuration } from './common.js';
 
-var History = {};
+let History = new Map();
 
-chrome.browserAction.setBadgeText({ 'text': '?'});
-chrome.browserAction.setBadgeBackgroundColor({ 'color': "#777" });
-
-function Update(t, tabId, url) {
-  if (!url) {
-    return;
+// 初始化时加载存储的数据
+chrome.runtime.onInstalled.addListener(async () => {
+  const { history } = await chrome.storage.local.get('history');
+  if (history) {
+    History = new Map(Object.entries(history).map(([key, value]) => [Number(key), value]));
   }
-  if (tabId in History) {
-    if (url == History[tabId][0][1]) {
-      return;
-    }
-  } else {
-    History[tabId] = [];
-  }
-  History[tabId].unshift([t, url]);
+});
 
-  var history_limit = parseInt(localStorage["history_size"]);
-  if (! history_limit) {
-    history_limit = 23;
-  }
-  while (History[tabId].length > history_limit) {
-    History[tabId].pop();
-  }
-
-  chrome.browserAction.setBadgeText({ 'tabId': tabId, 'text': '0:00'});
-  chrome.browserAction.setPopup({ 'tabId': tabId, 'popup': "popup.html#tabId=" + tabId});
+// 保存数据到存储
+async function saveHistory() {
+  await chrome.storage.local.set({ history: Object.fromEntries(History) });
 }
 
-function HandleUpdate(tabId, changeInfo, tab) {
-  Update(new Date(), tabId, changeInfo.url);
+async function Update(t, tabId, url) {
+  if (!url) return;
+
+  let tabHistory = History.get(tabId) || [];
+  if (tabHistory.length > 0 && url === tabHistory[0][1]) return;
+
+  tabHistory.unshift([t.toISOString(), url]); // 使用ISO字符串序列化日期
+  const { history_size } = await chrome.storage.local.get('history_size');
+  const limit = history_size || 23;
+
+  while (tabHistory.length > limit) tabHistory.pop();
+  History.set(tabId, tabHistory);
+  await saveHistory();
+
+  chrome.action.setBadgeText({ tabId, text: '0:00' });
+  chrome.action.setPopup({ tabId, popup: `popup.html#tabId=${tabId}` });
 }
 
-function HandleRemove(tabId, removeInfo) {
-  delete History[tabId];
-}
+// 事件监听器
+//const handleUpdate = (tabId, changeInfo) => Update(new Date(), tabId, changeInfo.url);
+const handleUpdate = (tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete' && tab.url) {
+    Update(new Date(), tabId, tab.url);
+  }
+};
 
-function HandleReplace(addedTabId, removedTabId) {
-  var t = new Date();
-  delete History[removedTabId];
-  chrome.tabs.get(addedTabId, function(tab) {
-    Update(t, addedTabId, tab.url);
+const handleRemove = (tabId) => {
+  History.delete(tabId);
+  saveHistory();
+};
+const handleReplace = (addedTabId, removedTabId) => {
+  History.delete(removedTabId);
+  chrome.tabs.get(addedTabId).then(tab => Update(new Date(), addedTabId, tab.url));
+};
+
+// 定时更新徽章
+function UpdateBadges() {
+  const now = new Date();
+  History.forEach((entries, tabId) => {
+    const firstEntryTime = new Date(entries[0][0]); // 反序列化日期
+    const duration = FormatDuration(now - firstEntryTime);
+    chrome.action.setBadgeText({ tabId, text: duration });
   });
 }
 
-
-function UpdateBadges() {
-  var now = new Date();
-  for (tabId in History) {
-    var description = FormatDuration(now - History[tabId][0][0]);
-    chrome.browserAction.setBadgeText({ 'tabId': parseInt(tabId), 'text': description});
-  }
-}
-
+// 注册事件和定时器
+chrome.tabs.onUpdated.addListener(handleUpdate);
+chrome.tabs.onRemoved.addListener(handleRemove);
+chrome.tabs.onReplaced.addListener(handleReplace);
 setInterval(UpdateBadges, 1000);
-
-chrome.tabs.onUpdated.addListener(HandleUpdate);
-chrome.tabs.onRemoved.addListener(HandleRemove);
-chrome.tabs.onReplaced.addListener(HandleReplace);
