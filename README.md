@@ -11,3 +11,4 @@ long you spent there.
 All data is kept locally in ram; no data is sent over the network or saved to
 disk.
 
+[Get it from the Chrome Web Store](https://chromewebstore.google.com/detail/page-timer-v3/pmajppgebfjdjocmhjeoggnffafnbejk).
